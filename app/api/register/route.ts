@@ -13,7 +13,7 @@ function codesMatch(a: string, b: string): boolean {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-export async function POST(req: Request) {
+async function handle(req: Request) {
   const inviteCode = process.env.INVITE_CODE;
   if (!inviteCode) {
     return NextResponse.json(
@@ -82,4 +82,21 @@ export async function POST(req: Request) {
     );
   }
   return NextResponse.json({ ok: true }, { status: 201 });
+}
+
+export async function POST(req: Request) {
+  try {
+    return await handle(req);
+  } catch (err) {
+    console.error("register failed:", err);
+    const noDb = err instanceof Error && err.message.includes("DATABASE_URL");
+    return NextResponse.json(
+      {
+        error: noDb
+          ? "The server isn't connected to a database yet (DATABASE_URL is missing)."
+          : "Server hit a database error. Check the Vercel runtime logs for /api/register.",
+      },
+      { status: 500 },
+    );
+  }
 }

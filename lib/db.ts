@@ -9,7 +9,8 @@ const globalForDb = globalThis as unknown as {
 };
 
 async function createDriver(): Promise<Driver> {
-  const url = process.env.DATABASE_URL;
+  // Vercel's Neon integration sometimes names it POSTGRES_URL instead.
+  const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
 
   if (url) {
     const sql = neon(url);
