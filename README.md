@@ -39,5 +39,5 @@ Use personal Gmail accounts. School-managed Google accounts usually block sign-i
 
 ## Notes
 
-- Login attempts are throttled per username (8 failures per 15 minutes), and messages are rate limited per user.
+- Login attempts are throttled per username (8 failures per 15 minutes), wrong invite codes are throttled (20 per 15 minutes, app-wide), and messages are rate limited per user.
 - Bumping `AUTH_SECRET` signs everyone out.
