@@ -1,0 +1,377 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  embedSrc,
+  originalUrl,
+  PLATFORM_LABEL,
+  type Platform,
+} from "@/lib/reels";
+
+type Reel = {
+  id: number;
+  platform: Platform;
+  extId: string;
+  title: string;
+  author: string;
+  auto: boolean;
+  addedBy: string | null;
+  mine: boolean;
+  createdAt: string;
+};
+
+const DOT: Record<Platform, string> = {
+  youtube: "bg-red-500",
+  tiktok: "bg-cyan-400",
+  instagram: "bg-fuchsia-500",
+};
+
+const inputClass =
+  "w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-indigo-400/60";
+
+export default function Reels() {
+  const router = useRouter();
+  const [reels, setReels] = useState<Reel[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [autoFeed, setAutoFeed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [active, setActive] = useState(0);
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [url, setUrl] = useState("");
+  const [caption, setCaption] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const scroller = useRef<HTMLDivElement>(null);
+  const jumpToTop = useRef(false);
+  const busy = useRef(false);
+  const emptyRetries = useRef(0);
+
+  const load = useCallback(
+    async (before?: number) => {
+      if (busy.current) return;
+      busy.current = true;
+      try {
+        const res = await fetch(
+          `/api/reels?limit=10${before ? `&before=${before}` : ""}`,
+          { cache: "no-store" },
+        );
+        if (res.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          reels: Reel[];
+          hasMore: boolean;
+          autoFeed: boolean;
+        };
+        setReels((prev) => {
+          const seen = new Set(prev.map((r) => r.id));
+          return [...prev, ...data.reels.filter((r) => !seen.has(r.id))];
+        });
+        setHasMore(data.hasMore);
+        setAutoFeed(data.autoFeed);
+      } catch {
+        // offline, the next scroll will try again
+      } finally {
+        busy.current = false;
+        setLoaded(true);
+      }
+    },
+    [router],
+  );
+
+  useEffect(() => {
+    // Fetching the first page on mount; state is only set after the await.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
+
+  // Empty feed with auto-updates on: the first fill may still be running, so check back a few times.
+  useEffect(() => {
+    if (!loaded || reels.length > 0 || !autoFeed || emptyRetries.current >= 3) {
+      return;
+    }
+    const t = setTimeout(() => {
+      emptyRetries.current += 1;
+      load();
+    }, 6000);
+    return () => clearTimeout(t);
+  }, [loaded, reels.length, autoFeed, load]);
+
+  // Track which reel is on screen
+  useEffect(() => {
+    const root = scroller.current;
+    if (!root) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          // A slide leaving the view also fires (at 60% and falling), so check the ratio.
+          if (e.isIntersecting && e.intersectionRatio >= 0.6) {
+            setActive(Number((e.target as HTMLElement).dataset.index));
+          }
+        }
+      },
+      { root, threshold: 0.6 },
+    );
+    root.querySelectorAll("[data-index]").forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, [reels.length]);
+
+  // Endless scroll: fetch the next page when you get near the end
+  useEffect(() => {
+    if (hasMore && reels.length > 0 && active >= reels.length - 3) {
+      // Next page fetch; state is only set after the await.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      load(reels[reels.length - 1].id);
+    }
+  }, [active, hasMore, reels, load]);
+
+  // After you add a reel, show it: wait for the new slide to render, then jump to the top.
+  useEffect(() => {
+    if (jumpToTop.current) {
+      jumpToTop.current = false;
+      scroller.current?.scrollTo({ top: 0 });
+    }
+  }, [reels]);
+
+  // Arrow keys / j / k to step through on desktop
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const dir =
+        e.key === "ArrowDown" || e.key === "j"
+          ? 1
+          : e.key === "ArrowUp" || e.key === "k"
+            ? -1
+            : 0;
+      const root = scroller.current;
+      if (!dir || !root) return;
+      const next = Math.min(Math.max(active + dir, 0), reels.length - 1);
+      e.preventDefault();
+      root.scrollTo({ top: next * root.clientHeight, behavior: "smooth" });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, reels.length]);
+
+  async function addReel(e: React.FormEvent) {
+    e.preventDefault();
+    if (adding || !url.trim()) return;
+    setAdding(true);
+    setAddError(null);
+    try {
+      const res = await fetch("/api/reels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, caption }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAddError(data.error ?? "Couldn't add that.");
+        return;
+      }
+      jumpToTop.current = true;
+      setReels((prev) => [data.reel as Reel, ...prev]);
+      setActive(0);
+      setUrl("");
+      setCaption("");
+      setAddOpen(false);
+    } catch {
+      setAddError("Couldn't reach the server.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function remove(id: number) {
+    try {
+      const res = await fetch(`/api/reels?id=${id}`, { method: "DELETE" });
+      if (res.ok) setReels((prev) => prev.filter((r) => r.id !== id));
+    } catch {
+      // leave it in the list, user can retry
+    }
+  }
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center justify-between px-3 py-2">
+        <p className="text-xs text-white/40">
+          {reels.length > 0
+            ? `${Math.min(active + 1, reels.length)} / ${reels.length}${hasMore ? "+" : ""}`
+            : " "}
+        </p>
+        <button
+          onClick={() => setAddOpen((o) => !o)}
+          aria-expanded={addOpen}
+          className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium transition hover:bg-indigo-400"
+        >
+          {addOpen ? "Close" : "+ Add reel"}
+        </button>
+      </div>
+
+      {addOpen && (
+        <form
+          onSubmit={addReel}
+          className="absolute inset-x-2 top-11 z-20 space-y-2 rounded-xl border border-white/10 bg-[#12151c] p-3 shadow-2xl"
+        >
+          <input
+            className={inputClass}
+            placeholder="Paste a YouTube Shorts, TikTok or Instagram reel link"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            autoFocus
+            inputMode="url"
+            autoCapitalize="none"
+          />
+          <input
+            className={inputClass}
+            placeholder="Caption (optional)"
+            value={caption}
+            maxLength={140}
+            onChange={(e) => setCaption(e.target.value)}
+          />
+          {addError && (
+            <p role="alert" className="text-xs text-rose-400">
+              {addError}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={adding || !url.trim()}
+            className="w-full rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium transition hover:bg-indigo-400 disabled:opacity-40"
+          >
+            {adding ? "Adding..." : "Add to feed"}
+          </button>
+        </form>
+      )}
+
+      <div
+        ref={scroller}
+        // Anchoring would keep the old reel in view when a new one is inserted above it.
+        style={{ overflowAnchor: "none" }}
+        className="thin-scroll min-h-0 flex-1 snap-y snap-mandatory overflow-y-scroll overscroll-contain"
+      >
+        {loaded && reels.length === 0 && (
+          <div className="flex h-full flex-col items-center justify-center gap-1 px-8 text-center">
+            <p className="text-sm text-white/60">
+              {autoFeed ? "Pulling in fresh Shorts..." : "No reels yet."}
+            </p>
+            <p className="text-xs text-white/30">
+              Hit &quot;Add reel&quot; and paste a link to start the feed.
+            </p>
+          </div>
+        )}
+
+        {reels.map((r, i) => (
+          <Slide
+            key={r.id}
+            reel={r}
+            index={i}
+            live={i === active}
+            onRemove={remove}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Slide({
+  reel,
+  index,
+  live,
+  onRemove,
+}: {
+  reel: Reel;
+  index: number;
+  live: boolean;
+  onRemove: (id: number) => void;
+}) {
+  // extId already passed a strict regex server-side, so this is safe to inline.
+  const poster =
+    reel.platform === "youtube"
+      ? `url(https://i.ytimg.com/vi/${reel.extId}/hqdefault.jpg)`
+      : undefined;
+
+  return (
+    <section
+      data-index={index}
+      className="flex h-full snap-start snap-always flex-col px-2 pb-2"
+    >
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <div
+          className="relative overflow-hidden rounded-2xl bg-black ring-1 ring-white/10"
+          style={{ height: "100%", aspectRatio: "9 / 16", maxWidth: "100%" }}
+        >
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-end gap-1 bg-cover bg-center p-4 text-center"
+            style={{
+              backgroundImage: poster,
+              backgroundColor: poster ? undefined : "#14171f",
+            }}
+          >
+            <span className="rounded-full bg-black/60 px-3 py-1 text-xs text-white/80">
+              {live ? "Loading..." : "Scroll here to play"}
+            </span>
+          </div>
+          {live && (
+            <iframe
+              key={reel.id}
+              src={embedSrc(reel.platform, reel.extId, true)}
+              title={reel.title || `${PLATFORM_LABEL[reel.platform]} reel`}
+              className="absolute inset-0 h-full w-full border-0"
+              allow="autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-write"
+              allowFullScreen
+              referrerPolicy="strict-origin-when-cross-origin"
+            />
+          )}
+        </div>
+      </div>
+
+      <div className="flex shrink-0 items-start justify-between gap-3 px-1 pt-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[11px] text-white/50">
+            <span className={`h-2 w-2 rounded-full ${DOT[reel.platform]}`} />
+            <span className="truncate">
+              {PLATFORM_LABEL[reel.platform]}
+              {reel.author ? ` · ${reel.author}` : ""}
+            </span>
+          </div>
+          <p className="line-clamp-1 text-sm text-white/90">
+            {reel.title || "Untitled"}
+          </p>
+          <p className="text-[11px] text-white/30">
+            {reel.auto ? "auto-picked" : `added by ${reel.addedBy ?? "someone"}`}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-1">
+          <a
+            href={originalUrl(reel.platform, reel.extId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-md px-2 py-1 text-xs text-white/50 transition hover:bg-white/5 hover:text-white"
+          >
+            Open
+          </a>
+          {reel.mine && (
+            <button
+              onClick={() => onRemove(reel.id)}
+              className="rounded-md px-2 py-1 text-xs text-rose-300/70 transition hover:bg-white/5 hover:text-rose-300"
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}

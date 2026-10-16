@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signOut } from "next-auth/react";
+import EmojiPicker from "@/components/EmojiPicker";
+import Header from "@/components/Header";
+import { isEmojiOnly } from "@/lib/emoji";
 
 type Msg = {
   id: number;
@@ -35,7 +37,9 @@ export default function Chat({ me }: { me: { id: string; name: string } }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastId = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true); // auto-scroll only if the reader is at the bottom
@@ -101,10 +105,25 @@ export default function Chat({ me }: { me: { id: string; name: string } }) {
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   }
 
+  function insertEmoji(emoji: string) {
+    const el = inputRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    if (next.length > 2000) return;
+    setText(next);
+    const caret = start + emoji.length;
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(caret, caret);
+    });
+  }
+
   async function send() {
     const body = text.trim();
     if (!body || sending) return;
     setSending(true);
+    setPickerOpen(false); // close now, not on reply, or a slow reply would shut a picker you just reopened
     setError(null);
     try {
       const res = await fetch("/api/messages", {
@@ -133,18 +152,7 @@ export default function Chat({ me }: { me: { id: string; name: string } }) {
 
   return (
     <div className="mx-auto flex h-dvh w-full max-w-2xl flex-col">
-      <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">chat</h1>
-          <p className="text-xs text-white/40">signed in as {me.name}</p>
-        </div>
-        <button
-          onClick={() => signOut({ callbackUrl: "/login" })}
-          className="rounded-md px-2.5 py-1.5 text-xs text-white/50 transition hover:bg-white/5 hover:text-white"
-        >
-          Sign out
-        </button>
-      </header>
+      <Header active="chat" name={me.name} />
 
       <div
         ref={listRef}
@@ -161,6 +169,7 @@ export default function Chat({ me }: { me: { id: string; name: string } }) {
           const mine = m.authorId === me.id;
           const prev = messages[i - 1];
           const showName = !prev || prev.authorId !== m.authorId;
+          const big = isEmojiOnly(m.body);
           return (
             <div
               key={m.id}
@@ -176,9 +185,15 @@ export default function Chat({ me }: { me: { id: string; name: string } }) {
               )}
               <div
                 title={timeLabel(m.createdAt)}
-                className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
-                  mine ? "bg-indigo-500 text-white" : "bg-white/8 text-white/90"
-                }`}
+                className={
+                  big
+                    ? "max-w-[80%] whitespace-pre-wrap break-words px-1 text-4xl leading-tight"
+                    : `max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
+                        mine
+                          ? "bg-indigo-500 text-white"
+                          : "bg-white/8 text-white/90"
+                      }`
+                }
               >
                 {m.body}
               </div>
@@ -204,8 +219,24 @@ export default function Chat({ me }: { me: { id: string; name: string } }) {
             {error}
           </p>
         )}
-        <div className="flex items-end gap-2">
+        <div className="relative flex items-end gap-2">
+          {pickerOpen && (
+            <EmojiPicker
+              onPick={insertEmoji}
+              onClose={() => setPickerOpen(false)}
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => setPickerOpen((o) => !o)}
+            aria-label="Emoji"
+            aria-expanded={pickerOpen}
+            className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-xl transition hover:bg-white/10"
+          >
+            😊
+          </button>
           <textarea
+            ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {

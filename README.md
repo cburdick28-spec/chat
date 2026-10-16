@@ -21,6 +21,19 @@ Copy `.env.example` to `.env.local` for local dev. On Vercel, add these in Proje
 
 Tables are created automatically on first request.
 
+## Emojis
+
+Tap the smiley next to the message box. Recents are remembered per device, and a message that's only a few emoji shows up big with no bubble.
+
+## Reels
+
+The Reels tab is a vertical scroll feed (YouTube Shorts, TikTok, Instagram) that plays inside the app using each platform's official embed player. Only the reel on screen is loaded.
+
+- **Pasted links:** anyone signed in can hit "+ Add reel" and paste a YouTube Shorts, TikTok or Instagram reel link. Links are parsed down to a platform + ID and the embed URL is rebuilt from that, never from the raw link. You can remove your own reels.
+- **Auto-picked Shorts:** set `YOUTUBE_API_KEY` and the feed tops itself up from YouTube (embeddable, public, 90s or less, strict safe search) every `REELS_REFRESH_HOURS` (default 6). It refreshes when someone opens the feed, no cron needed. Topics come from `REEL_QUERIES`.
+- **Why not auto-pull TikTok/Instagram too?** They have no public API for browsing a feed, and scraping or re-hosting their videos breaks their terms. Embeds of specific links are the supported route.
+- Some creators turn embedding off, and those reels will show an error in the player. The "Open" link goes to the original.
+
 ## Run locally
 
 ```bash

@@ -75,6 +75,26 @@ async function createSchema() {
   await query(
     `create index if not exists messages_author_created on messages (author_id, created_at)`,
   );
+  await query(`
+    create table if not exists reels (
+      id bigserial primary key,
+      platform text not null,
+      ext_id text not null,
+      title text not null default '',
+      author text not null default '',
+      source text not null default 'user',
+      added_by text,
+      added_by_name text,
+      created_at timestamptz not null default now(),
+      unique (platform, ext_id)
+    )
+  `);
+  await query(`
+    create table if not exists reel_meta (
+      key text primary key,
+      value timestamptz not null
+    )
+  `);
 }
 
 /** Creates tables on first use. Safe to call on every request. */

@@ -65,7 +65,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
   }
 
-  const body = typeof data.body === "string" ? data.body.trim() : "";
+  // Postgres text columns reject NUL bytes, so strip them instead of 500ing.
+  const body =
+    typeof data.body === "string" ? data.body.replace(/\u0000/g, "").trim() : "";
   if (!body || body.length > MAX_BODY) {
     return NextResponse.json(
       { error: `Message must be 1-${MAX_BODY} characters.` },
