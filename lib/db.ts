@@ -95,6 +95,34 @@ async function createSchema() {
       value timestamptz not null
     )
   `);
+  // Which topic search found a reel, so a person's interests can bump matching ones.
+  await query(`alter table reels add column if not exists topic text`);
+  // What each person has already scrolled past. Drives the per-user feed.
+  await query(`
+    create table if not exists reel_seen (
+      user_id text not null,
+      reel_id bigint not null references reels(id) on delete cascade,
+      seen_at timestamptz not null default now(),
+      primary key (user_id, reel_id)
+    )
+  `);
+  await query(
+    `create index if not exists reel_seen_user_at on reel_seen (user_id, seen_at)`,
+  );
+  await query(`
+    create table if not exists user_interests (
+      user_id text not null,
+      topic text not null,
+      primary key (user_id, topic)
+    )
+  `);
+  // YouTube search quota is finite (100 units a search), so count searches per day.
+  await query(`
+    create table if not exists yt_budget (
+      day date primary key,
+      searches int not null default 0
+    )
+  `);
 }
 
 /** Creates tables on first use. Safe to call on every request. */

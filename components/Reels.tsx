@@ -8,6 +8,7 @@ import {
   PLATFORM_LABEL,
   type Platform,
 } from "@/lib/reels";
+import { MAX_INTERESTS, TOPIC_GROUPS } from "@/lib/topics";
 
 type Reel = {
   id: number;
@@ -33,7 +34,7 @@ const inputClass =
 export default function Reels() {
   const router = useRouter();
   const [reels, setReels] = useState<Reel[]>([]);
-  const [hasMore, setHasMore] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [autoFeed, setAutoFeed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [active, setActive] = useState(0);
@@ -44,18 +45,24 @@ export default function Reels() {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
+  const [forYouOpen, setForYouOpen] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [savingInterests, setSavingInterests] = useState(false);
+  const [interestError, setInterestError] = useState<string | null>(null);
+
   const scroller = useRef<HTMLDivElement>(null);
   const jumpToTop = useRef(false);
   const busy = useRef(false);
   const emptyRetries = useRef(0);
+  const reported = useRef(new Set<number>());
 
   const load = useCallback(
-    async (before?: number) => {
+    async (cursorParam?: string) => {
       if (busy.current) return;
       busy.current = true;
       try {
         const res = await fetch(
-          `/api/reels?limit=10${before ? `&before=${before}` : ""}`,
+          `/api/reels?limit=10${cursorParam ? `&cursor=${encodeURIComponent(cursorParam)}` : ""}`,
           { cache: "no-store" },
         );
         if (res.status === 401) {
@@ -65,14 +72,15 @@ export default function Reels() {
         if (!res.ok) return;
         const data = (await res.json()) as {
           reels: Reel[];
-          hasMore: boolean;
+          nextCursor: string | null;
           autoFeed: boolean;
         };
         setReels((prev) => {
           const seen = new Set(prev.map((r) => r.id));
           return [...prev, ...data.reels.filter((r) => !seen.has(r.id))];
         });
-        setHasMore(data.hasMore);
+        // A first-page refetch must not rewind a cursor we've already advanced past.
+        setCursor((c) => (cursorParam || c === null ? data.nextCursor : c));
         setAutoFeed(data.autoFeed);
       } catch {
         // offline, the next scroll will try again
@@ -123,12 +131,35 @@ export default function Reels() {
 
   // Endless scroll: fetch the next page when you get near the end
   useEffect(() => {
-    if (hasMore && reels.length > 0 && active >= reels.length - 3) {
+    if (cursor && reels.length > 0 && active >= reels.length - 3) {
       // Next page fetch; state is only set after the await.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      load(reels[reels.length - 1].id);
+      load(cursor);
     }
-  }, [active, hasMore, reels, load]);
+  }, [active, cursor, reels.length, load]);
+
+  // Reached the end of everything for now: check back, the server keeps pulling in fresh ones.
+  useEffect(() => {
+    if (!autoFeed || cursor !== null || reels.length === 0) return;
+    if (active < reels.length - 1) return;
+    const t = setInterval(() => load(), 15000);
+    return () => clearInterval(t);
+  }, [autoFeed, cursor, active, reels.length, load]);
+
+  // Tell the server a reel was seen once it has been on screen a moment, so it isn't served again.
+  const activeId = reels[active]?.id;
+  useEffect(() => {
+    if (activeId === undefined || reported.current.has(activeId)) return;
+    const t = setTimeout(() => {
+      reported.current.add(activeId);
+      fetch("/api/reels/seen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [activeId] }),
+      }).catch(() => reported.current.delete(activeId));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [activeId]);
 
   // After you add a reel, show it: wait for the new slide to render, then jump to the top.
   useEffect(() => {
@@ -158,6 +189,65 @@ export default function Reels() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [active, reels.length]);
+
+  async function openForYou() {
+    setAddOpen(false);
+    const next = !forYouOpen;
+    setForYouOpen(next);
+    if (!next) return;
+    setInterestError(null);
+    try {
+      const res = await fetch("/api/reels/interests", { cache: "no-store" });
+      if (res.ok) setPicked(((await res.json()) as { topics: string[] }).topics);
+    } catch {
+      // keep whatever is selected
+    }
+  }
+
+  function toggleTopic(t: string) {
+    setInterestError(null);
+    setPicked((p) =>
+      p.includes(t)
+        ? p.filter((x) => x !== t)
+        : p.length >= MAX_INTERESTS
+          ? p
+          : [...p, t],
+    );
+  }
+
+  async function saveInterests() {
+    if (savingInterests) return;
+    setSavingInterests(true);
+    setInterestError(null);
+    try {
+      const res = await fetch("/api/reels/interests", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topics: picked }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setInterestError(data.error ?? "Couldn't save that.");
+        return;
+      }
+      setForYouOpen(false);
+      // Start the feed over so new picks apply; seen reels stay out of it.
+      setReels([]);
+      setCursor(null);
+      setActive(0);
+      emptyRetries.current = 0;
+      scroller.current?.scrollTo({ top: 0 });
+      load();
+    } catch {
+      setInterestError("Couldn't reach the server.");
+    } finally {
+      setSavingInterests(false);
+    }
+  }
 
   async function addReel(e: React.FormEvent) {
     e.preventDefault();
@@ -206,17 +296,80 @@ export default function Reels() {
       <div className="flex shrink-0 items-center justify-between px-3 py-2">
         <p className="text-xs text-white/40">
           {reels.length > 0
-            ? `${Math.min(active + 1, reels.length)} / ${reels.length}${hasMore ? "+" : ""}`
+            ? `${Math.min(active + 1, reels.length)}${cursor ? "" : " · end for now"}`
             : " "}
         </p>
-        <button
-          onClick={() => setAddOpen((o) => !o)}
-          aria-expanded={addOpen}
-          className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium transition hover:bg-indigo-400"
-        >
-          {addOpen ? "Close" : "+ Add reel"}
-        </button>
+        <div className="flex gap-2">
+          {autoFeed && (
+            <button
+              onClick={openForYou}
+              aria-expanded={forYouOpen}
+              className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium transition hover:bg-white/10"
+            >
+              For you
+            </button>
+          )}
+          <button
+            onClick={() => {
+              setForYouOpen(false);
+              setAddOpen((o) => !o);
+            }}
+            aria-expanded={addOpen}
+            className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium transition hover:bg-indigo-400"
+          >
+            {addOpen ? "Close" : "+ Add reel"}
+          </button>
+        </div>
       </div>
+
+      {forYouOpen && (
+        <div className="thin-scroll absolute inset-x-2 top-11 z-20 max-h-[70%] space-y-3 overflow-y-auto rounded-xl border border-white/10 bg-[#12151c] p-3 shadow-2xl">
+          <p className="text-xs text-white/50">
+            Pick up to {MAX_INTERESTS} things you like. You&apos;ll see more of them,
+            mixed with random stuff so it never gets stale. This isn&apos;t linked to
+            your YouTube account.
+          </p>
+          {TOPIC_GROUPS.map((g) => (
+            <div key={g.label}>
+              <p className="mb-1 text-[11px] uppercase tracking-wide text-white/30">
+                {g.label}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {g.topics.map((t) => {
+                  const on = picked.includes(t);
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => toggleTopic(t)}
+                      aria-pressed={on}
+                      className={`rounded-full border px-2.5 py-1 text-xs transition ${
+                        on
+                          ? "border-indigo-400 bg-indigo-500/30 text-white"
+                          : "border-white/10 text-white/60 hover:bg-white/5"
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {interestError && (
+            <p role="alert" className="text-xs text-rose-400">
+              {interestError}
+            </p>
+          )}
+          <button
+            onClick={saveInterests}
+            disabled={savingInterests}
+            className="sticky bottom-0 w-full rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium shadow-[0_-8px_12px_#12151c] transition hover:bg-indigo-400 disabled:opacity-40"
+          >
+            {savingInterests ? "Saving..." : "Save and refresh my feed"}
+          </button>
+        </div>
+      )}
 
       {addOpen && (
         <form
