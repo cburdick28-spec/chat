@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   embedSrc,
   originalUrl,
@@ -34,6 +35,26 @@ export default function ReelCard({
   playing: boolean;
   onPlay: () => void;
 }) {
+  const [feed, setFeed] = useState<"idle" | "adding" | "added" | "exists" | "error">(
+    "idle",
+  );
+
+  // Goes through the normal add-a-link route, so it gets the same validation and limits.
+  async function addToFeed() {
+    if (feed === "adding") return;
+    setFeed("adding");
+    try {
+      const res = await fetch("/api/reels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: originalUrl(reel.platform, reel.extId) }),
+      });
+      setFeed(res.ok ? "added" : res.status === 409 ? "exists" : "error");
+    } catch {
+      setFeed("error");
+    }
+  }
+
   // extId came from our reels table, which validated it with a strict regex.
   const poster =
     reel.platform === "youtube"
@@ -79,14 +100,32 @@ export default function ReelCard({
             {reel.author ? ` · ${reel.author}` : ""}
           </p>
         </div>
-        <a
-          href={originalUrl(reel.platform, reel.extId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="shrink-0 text-[11px] text-white/50 transition hover:text-white"
-        >
-          Open
-        </a>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={addToFeed}
+            disabled={feed === "adding" || feed === "added" || feed === "exists"}
+            className="text-[11px] text-indigo-300 transition hover:text-indigo-200 disabled:text-white/40"
+          >
+            {feed === "adding"
+              ? "Adding..."
+              : feed === "added"
+                ? "In your feed"
+                : feed === "exists"
+                  ? "Already in feed"
+                  : feed === "error"
+                    ? "Retry"
+                    : "+ Feed"}
+          </button>
+          <a
+            href={originalUrl(reel.platform, reel.extId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] text-white/50 transition hover:text-white"
+          >
+            Open
+          </a>
+        </div>
       </div>
     </div>
   );

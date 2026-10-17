@@ -1,4 +1,11 @@
-import { originalUrl, parseReelUrl, type Platform } from "@/lib/reels";
+import {
+  extractReelLinks,
+  isTikTokShortLink,
+  originalUrl,
+  parseReelUrl,
+  type ParsedReel,
+  type Platform,
+} from "@/lib/reels";
 
 /** Strip control chars (Postgres rejects NUL), trim, and cap length. */
 export function clean(s: unknown, max: number): string {
@@ -71,4 +78,23 @@ export async function fetchOEmbed(
   } catch {
     return blank;
   }
+}
+
+/**
+ * The first reel link in a piece of text, resolved to a platform + validated ID.
+ * TikTok short links get one redirect lookup. Returns the matching token too, so
+ * a message that is only the link can drop it and show just the card.
+ */
+export async function findReelInText(
+  text: string,
+): Promise<(ParsedReel & { token: string }) | null> {
+  for (const token of extractReelLinks(text).slice(0, 3)) {
+    let parsed = parseReelUrl(token);
+    if (!parsed && isTikTokShortLink(token)) {
+      const full = await resolveTikTokShortLink(token);
+      if (full) parsed = parseReelUrl(full);
+    }
+    if (parsed) return { ...parsed, token };
+  }
+  return null;
 }

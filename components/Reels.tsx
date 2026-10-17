@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   embedSrc,
+  extractReelLinks,
   originalUrl,
   PLATFORM_LABEL,
   type Platform,
@@ -32,6 +33,8 @@ const DOT: Record<Platform, string> = {
   instagram: "bg-fuchsia-500",
 };
 
+const MAX_BULK = 10; // matches the server's 10 reels per 10 minutes
+
 const inputClass =
   "w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-indigo-400/60";
 
@@ -48,6 +51,7 @@ export default function Reels() {
   const [caption, setCaption] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [addProgress, setAddProgress] = useState<string | null>(null);
 
   const [forYouOpen, setForYouOpen] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
@@ -261,36 +265,82 @@ export default function Reels() {
     }
   }
 
+  // Takes one link or a whole pile. Each link goes through the normal add route one at a
+  // time, so every one gets the same validation and limits as a single paste.
   async function addReel(e: React.FormEvent) {
     e.preventDefault();
     if (adding || !url.trim()) return;
+    const links = extractReelLinks(url).slice(0, MAX_BULK);
+    if (links.length === 0) {
+      setAddError(
+        "I couldn't find a YouTube Shorts, TikTok or Instagram reel link in that.",
+      );
+      return;
+    }
     setAdding(true);
     setAddError(null);
+    const added: Reel[] = [];
+    let dupes = 0;
+    let bad = 0;
+    let stopped: string | null = null;
     try {
-      const res = await fetch("/api/reels", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, caption }),
-      });
-      if (res.status === 401) {
-        router.replace("/login");
-        return;
+      for (let i = 0; i < links.length; i++) {
+        setAddProgress(links.length > 1 ? `Adding ${i + 1}/${links.length}...` : null);
+        const res = await fetch("/api/reels", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: links[i],
+            // A caption only makes sense when it's a single link.
+            caption: links.length === 1 ? caption : "",
+          }),
+        });
+        if (res.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) added.push(data.reel as Reel);
+        else if (res.status === 409) dupes++;
+        else if (res.status === 429) {
+          stopped = data.error ?? "Slow down a bit.";
+          break;
+        } else bad++;
       }
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setAddError(data.error ?? "Couldn't add that.");
-        return;
-      }
+    } catch {
+      stopped = "Couldn't reach the server.";
+    } finally {
+      setAdding(false);
+      setAddProgress(null);
+    }
+
+    if (added.length > 0) {
       jumpToTop.current = true;
-      setReels((prev) => [data.reel as Reel, ...prev]);
+      setReels((prev) => {
+        const have = new Set(prev.map((r) => r.id));
+        return [...added.filter((r) => !have.has(r.id)), ...prev];
+      });
       setActive(0);
+    }
+    const notes = [
+      added.length > 0 ? `Added ${added.length}.` : "",
+      dupes > 0 ? `${dupes} already in the feed.` : "",
+      bad > 0 ? `${bad} couldn't be added.` : "",
+      stopped ?? "",
+    ].filter(Boolean);
+    if (!stopped && bad === 0 && dupes === 0) {
       setUrl("");
       setCaption("");
       setAddOpen(false);
-    } catch {
-      setAddError("Couldn't reach the server.");
-    } finally {
-      setAdding(false);
+    } else if (added.length > 0 && !stopped && bad === 0) {
+      // Some were new and the rest were repeats: that's a success, show the note briefly.
+      setUrl("");
+      setCaption("");
+      setAddOpen(false);
+      setToast(notes.join(" "));
+      setTimeout(() => setToast(null), 3000);
+    } else {
+      setAddError(notes.join(" ") || "Couldn't add that.");
     }
   }
 
@@ -467,22 +517,34 @@ export default function Reels() {
           onSubmit={addReel}
           className="absolute inset-x-2 top-11 z-20 space-y-2 rounded-xl border border-white/10 bg-[#12151c] p-3 shadow-2xl"
         >
-          <input
-            className={inputClass}
-            placeholder="Paste a YouTube Shorts, TikTok or Instagram reel link"
+          <textarea
+            className={`${inputClass} resize-none`}
+            placeholder="Paste a link, or a whole pile of them (YouTube Shorts, TikTok, Instagram)"
             value={url}
+            rows={3}
             onChange={(e) => setUrl(e.target.value)}
             autoFocus
             inputMode="url"
             autoCapitalize="none"
           />
-          <input
-            className={inputClass}
-            placeholder="Caption (optional)"
-            value={caption}
-            maxLength={140}
-            onChange={(e) => setCaption(e.target.value)}
-          />
+          {extractReelLinks(url).length <= 1 && (
+            <input
+              className={inputClass}
+              placeholder="Caption (optional)"
+              value={caption}
+              maxLength={140}
+              onChange={(e) => setCaption(e.target.value)}
+            />
+          )}
+          {extractReelLinks(url).length > 1 && (
+            <p className="text-[11px] text-white/40">
+              {Math.min(extractReelLinks(url).length, MAX_BULK)} links found
+              {extractReelLinks(url).length > MAX_BULK
+                ? ` (only the first ${MAX_BULK} get added)`
+                : ""}
+              .
+            </p>
+          )}
           {addError && (
             <p role="alert" className="text-xs text-rose-400">
               {addError}
@@ -493,7 +555,7 @@ export default function Reels() {
             disabled={adding || !url.trim()}
             className="w-full rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium transition hover:bg-indigo-400 disabled:opacity-40"
           >
-            {adding ? "Adding..." : "Add to feed"}
+            {adding ? (addProgress ?? "Adding...") : "Add to feed"}
           </button>
         </form>
       )}

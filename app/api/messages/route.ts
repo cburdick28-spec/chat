@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { ensureSchema, query } from "@/lib/db";
 import { touchPerson } from "@/lib/people";
+import { fetchOEmbed, findReelInText } from "@/lib/reels-server";
 
 const MAX_BODY = 2000;
 
@@ -176,6 +177,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Slow down a sec." }, { status: 429 });
   }
 
+  // No reel attached by the app? If the text has a reel link, turn it into a card.
+  // Done after the rate limit so spamming links can't trigger outside lookups.
+  let text = body;
+  if (reel === null) {
+    const found = await findReelInText(body);
+    if (found) {
+      const meta = await fetchOEmbed(found.platform, found.extId);
+      reel = {
+        platform: found.platform,
+        ext_id: found.extId,
+        title: meta.title,
+        author: meta.author,
+      };
+      // The card replaces the raw link, so drop it from the text and keep the rest.
+      const rest = body
+        .replace(found.token, "")
+        .replace(/[ \t]{2,}/g, " ")
+        .trim();
+      // Leftovers like "()." with nothing readable in them count as empty.
+      text = /[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(rest) ? rest : "";
+    }
+  }
+
   const [row] = await query<Row>(
     `insert into messages
        (author_id, author, recipient_id, body,
@@ -186,7 +210,7 @@ export async function POST(req: Request) {
       userId,
       name,
       to,
-      body,
+      text,
       reel?.platform ?? null,
       reel?.ext_id ?? null,
       reel?.title ?? null,

@@ -82,6 +82,21 @@ export function isTikTokShortLink(raw: string): boolean {
   return host === "tiktok.com" && parts[0] === "t" && Boolean(parts[1]);
 }
 
+/**
+ * Pulls every reel link out of free text (a chat message, a pasted pile of links).
+ * Splits on whitespace and commas, trims trailing punctuation, de-duplicates,
+ * and keeps only tokens that parse as a reel or look like a TikTok short link.
+ */
+export function extractReelLinks(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split(/[\s,]+/)) {
+    const token = raw.replace(/^[(<[\u201c"']+|[)>\].,!?;:\u201d"']+$/g, "");
+    if (!token || out.includes(token)) continue;
+    if (parseReelUrl(token) || isTikTokShortLink(token)) out.push(token);
+  }
+  return out;
+}
+
 export function embedSrc(
   platform: Platform,
   extId: string,

@@ -30,6 +30,14 @@ The chat has an **Everyone** room plus private one-on-one messages. Tap a friend
 
 Hit **Send** under any reel to drop it into a DM or the Everyone room as a playable card, with an optional note. The card shows a poster until tapped, then plays right in the chat. The reel is copied into the message, so it keeps working even if someone removes it from the feed later.
 
+## Links in chat, and pasting piles of links
+
+Paste a YouTube Shorts, TikTok or Instagram link into any message (Everyone or a DM) and it turns into a playable card. If the message is only the link you just get the card; any other text stays as a normal bubble. Short TikTok links (`vm.tiktok.com`) are followed once to find the real video. Each card has a **+ Feed** button that adds the reel to your feed (it says "Already in feed" if it's there).
+
+"+ Add reel" takes one link or a whole pile (up to 10 at once, matching the 10-per-10-minutes limit). Paste a block of text and it picks out the reel links and skips the rest.
+
+TikTok is link-only on purpose: TikTok has no public API for browsing a feed (their Research API is for approved researchers, and the Display API only reads the videos of a TikTok user who signs in with TikTok), and scraping it breaks their terms. Embeds of specific links are the supported route.
+
 ## Hearts train "For you"
 
 The heart under each reel is a signal, not just a counter. Hearting reels of a topic pulls that topic forward in your feed (up to a cap, so it never takes over), and the next YouTube refresh searches your hearted topics, so the feed drifts toward what you actually like. Your "For you" picks still work and stack with hearts. Hearts only teach topics for auto-picked Shorts; pasted links have no topic.
