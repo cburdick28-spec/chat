@@ -20,7 +20,11 @@ type Reel = {
   addedBy: string | null;
   mine: boolean;
   createdAt: string;
+  liked: boolean;
+  likes: number;
 };
+
+type Person = { id: string; name: string; unread: number };
 
 const DOT: Record<Platform, string> = {
   youtube: "bg-red-500",
@@ -49,6 +53,13 @@ export default function Reels() {
   const [picked, setPicked] = useState<string[]>([]);
   const [savingInterests, setSavingInterests] = useState(false);
   const [interestError, setInterestError] = useState<string | null>(null);
+
+  const [sendFor, setSendFor] = useState<Reel | null>(null);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [sendNote, setSendNote] = useState("");
+  const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   const scroller = useRef<HTMLDivElement>(null);
   const jumpToTop = useRef(false);
@@ -192,6 +203,7 @@ export default function Reels() {
 
   async function openForYou() {
     setAddOpen(false);
+    setSendFor(null);
     const next = !forYouOpen;
     setForYouOpen(next);
     if (!next) return;
@@ -282,6 +294,84 @@ export default function Reels() {
     }
   }
 
+  // Optimistic heart: flip it now, roll back if the server says no.
+  async function toggleLike(id: number) {
+    const target = reels.find((r) => r.id === id);
+    if (!target) return;
+    const liked = !target.liked;
+    const patch = (l: boolean, n: number) =>
+      setReels((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, liked: l, likes: n } : r)),
+      );
+    patch(liked, Math.max(0, target.likes + (liked ? 1 : -1)));
+    try {
+      const res = await fetch("/api/reels/like", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, liked }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      if (!res.ok) {
+        patch(target.liked, target.likes);
+        return;
+      }
+      const data = (await res.json()) as { likes: number };
+      patch(liked, data.likes);
+    } catch {
+      patch(target.liked, target.likes);
+    }
+  }
+
+  async function openSend(reel: Reel) {
+    setAddOpen(false);
+    setForYouOpen(false);
+    setSendFor(reel);
+    setSendNote("");
+    setSendError(null);
+    try {
+      const res = await fetch("/api/people", { cache: "no-store" });
+      if (res.ok) setPeople(((await res.json()) as { people: Person[] }).people);
+    } catch {
+      // the Everyone option still works
+    }
+  }
+
+  async function sendReel(to: Person | null) {
+    if (!sendFor || sendingTo) return;
+    setSendingTo(to?.id ?? "all");
+    setSendError(null);
+    try {
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reelId: sendFor.id,
+          to: to?.id ?? null,
+          body: sendNote,
+        }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSendError(data.error ?? "Couldn't send that.");
+        return;
+      }
+      setSendFor(null);
+      setToast(`Sent to ${to?.name ?? "everyone"}`);
+      setTimeout(() => setToast(null), 2500);
+    } catch {
+      setSendError("Couldn't reach the server.");
+    } finally {
+      setSendingTo(null);
+    }
+  }
+
   async function remove(id: number) {
     try {
       const res = await fetch(`/api/reels?id=${id}`, { method: "DELETE" });
@@ -312,6 +402,7 @@ export default function Reels() {
           <button
             onClick={() => {
               setForYouOpen(false);
+              setSendFor(null);
               setAddOpen((o) => !o);
             }}
             aria-expanded={addOpen}
@@ -407,6 +498,71 @@ export default function Reels() {
         </form>
       )}
 
+      {sendFor && (
+        <div className="thin-scroll absolute inset-x-2 top-11 z-20 max-h-[70%] space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-[#12151c] p-3 shadow-2xl">
+          <div className="flex items-center justify-between gap-2">
+            <p className="min-w-0 truncate text-xs text-white/50">
+              Send &quot;{sendFor.title || "this reel"}&quot; to...
+            </p>
+            <button
+              onClick={() => setSendFor(null)}
+              className="shrink-0 rounded-md px-2 py-1 text-xs text-white/50 transition hover:bg-white/5 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+          <input
+            className={inputClass}
+            placeholder="Add a message (optional)"
+            value={sendNote}
+            maxLength={500}
+            onChange={(e) => setSendNote(e.target.value)}
+          />
+          {sendError && (
+            <p role="alert" className="text-xs text-rose-400">
+              {sendError}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              disabled={sendingTo !== null}
+              onClick={() => sendReel(null)}
+              className="rounded-full border border-indigo-400 bg-indigo-500/30 px-3 py-1.5 text-xs font-medium transition hover:bg-indigo-500/50 disabled:opacity-40"
+            >
+              {sendingTo === "all" ? "Sending..." : "Everyone"}
+            </button>
+            {people.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                disabled={sendingTo !== null}
+                onClick={() => sendReel(p)}
+                className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/80 transition hover:bg-white/10 disabled:opacity-40"
+              >
+                {sendingTo === p.id ? "Sending..." : p.name}
+              </button>
+            ))}
+          </div>
+          {people.length === 0 && (
+            <p className="text-[11px] text-white/30">
+              Friends show up here once they&apos;ve signed in.
+            </p>
+          )}
+        </div>
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="pointer-events-none absolute inset-x-0 top-12 z-30 flex justify-center"
+        >
+          <span className="rounded-full bg-emerald-500/90 px-3 py-1.5 text-xs font-medium text-white shadow-lg">
+            {toast}
+          </span>
+        </div>
+      )}
+
       <div
         ref={scroller}
         // Anchoring would keep the old reel in view when a new one is inserted above it.
@@ -431,6 +587,8 @@ export default function Reels() {
             index={i}
             live={i === active}
             onRemove={remove}
+            onLike={toggleLike}
+            onSend={openSend}
           />
         ))}
       </div>
@@ -443,11 +601,15 @@ function Slide({
   index,
   live,
   onRemove,
+  onLike,
+  onSend,
 }: {
   reel: Reel;
   index: number;
   live: boolean;
   onRemove: (id: number) => void;
+  onLike: (id: number) => void;
+  onSend: (reel: Reel) => void;
 }) {
   // extId already passed a strict regex server-side, so this is safe to inline.
   const poster =
@@ -506,7 +668,26 @@ function Slide({
             {reel.auto ? "auto-picked" : `added by ${reel.addedBy ?? "someone"}`}
           </p>
         </div>
-        <div className="flex shrink-0 gap-1">
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            onClick={() => onLike(reel.id)}
+            aria-pressed={reel.liked}
+            aria-label={reel.liked ? "Unlike" : "Like"}
+            className={`flex items-center gap-1 rounded-md px-2 py-1 text-sm transition hover:bg-white/5 ${
+              reel.liked ? "text-rose-400" : "text-white/50 hover:text-white"
+            }`}
+          >
+            {reel.liked ? "♥" : "♡"}
+            {reel.likes > 0 && (
+              <span className="text-xs tabular-nums">{reel.likes}</span>
+            )}
+          </button>
+          <button
+            onClick={() => onSend(reel)}
+            className="rounded-md px-2 py-1 text-xs text-white/50 transition hover:bg-white/5 hover:text-white"
+          >
+            Send
+          </button>
           <a
             href={originalUrl(reel.platform, reel.extId)}
             target="_blank"

@@ -140,7 +140,22 @@ async function pickTopics(userId: string): Promise<string[]> {
       [userId],
     )
   ).map((r) => r.topic);
-  const chosen = mine.length ? [pick(mine)] : [];
+  // Topics of reels they've hearted, most recent first, so likes steer what gets fetched.
+  const hearted = (
+    await query<{ topic: string }>(
+      `select lr.topic from reel_likes l join reels lr on lr.id = l.reel_id
+       where l.user_id = $1 and lr.topic is not null
+       order by l.liked_at desc limit 40`,
+      [userId],
+    )
+  ).map((r) => r.topic);
+  const chosen: string[] = [];
+  if (hearted.length) chosen.push(pick(hearted));
+  if (mine.length) {
+    const rest = mine.filter((t) => !chosen.includes(t));
+    // Both signals get a slot when there are two searches to spend.
+    if (rest.length && chosen.length < SEARCHES_PER_REFRESH) chosen.push(pick(rest));
+  }
   const pool = shuffle([...new Set([...ALL_TOPICS, ...customTopics()])]).filter(
     (t) => !chosen.includes(t),
   );

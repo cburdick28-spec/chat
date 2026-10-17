@@ -15,6 +15,8 @@ type Row = {
   added_by: string | null;
   added_by_name: string | null;
   created_at: string;
+  liked?: boolean;
+  likes?: number;
 };
 
 const COLS =
@@ -31,11 +33,18 @@ function toReel(r: Row, me: string) {
     addedBy: r.added_by_name,
     mine: r.added_by !== null && r.added_by === me,
     createdAt: new Date(r.created_at).toISOString(),
+    liked: r.liked === true,
+    likes: r.likes ?? 0,
   };
 }
 
+// Per-feed-row extras: did I heart this, and how many hearts overall.
+const LIKE_COLS = `exists(select 1 from reel_likes l where l.user_id = $1::text and l.reel_id = r.id) as liked,
+     (select count(*)::int from reel_likes l where l.reel_id = r.id) as likes`;
+
 // Each person gets their own stable shuffle: a hash of (user, reel). Reels that
-// match their picked interests, and links friends added in the last day, sort earlier.
+// match their picked interests or topics they've hearted, and links friends added
+// in the last day, sort earlier.
 const RANK = `(
   (('x' || substr(md5($1::text || ':' || r.id::text), 1, 8))::bit(32)::bigint) / 4294967296.0
   - case when r.topic is not null
@@ -43,6 +52,10 @@ const RANK = `(
     then 0.35 else 0 end
   - case when r.source = 'user' and r.created_at > now() - interval '1 day'
     then 2 else 0 end
+  - case when r.topic is not null then least(0.5, 0.1 * (
+      select count(*) from reel_likes l join reels lr on lr.id = l.reel_id
+      where l.user_id = $1::text and lr.topic = r.topic
+    )) else 0 end
 )`;
 
 type FeedRow = Row & { ord: string };
@@ -50,7 +63,7 @@ type FeedRow = Row & { ord: string };
 // Reels this person hasn't seen yet, in their personal order. Keyset-paged on (rank, id).
 function freshPage(userId: string, afterRank: string, afterId: string, n: number) {
   return query<FeedRow>(
-    `select ${COLS}, r.rank::text as ord
+    `select ${COLS}, ${LIKE_COLS}, r.rank::text as ord
      from (
        select r.*, ${RANK} as rank from reels r
        where not exists (
@@ -66,7 +79,7 @@ function freshPage(userId: string, afterRank: string, afterId: string, n: number
 // Once they've seen everything, loop back through the oldest-seen first.
 function replayPage(userId: string, afterEpoch: string, afterId: string, n: number) {
   return query<FeedRow>(
-    `select ${COLS}, extract(epoch from s.seen_at)::numeric::text as ord
+    `select ${COLS}, ${LIKE_COLS}, extract(epoch from s.seen_at)::numeric::text as ord
      from reels r join reel_seen s on s.reel_id = r.id and s.user_id = $1::text
      where (extract(epoch from s.seen_at)::numeric, r.id) > ($2::numeric, $3::bigint)
      order by extract(epoch from s.seen_at)::numeric, r.id limit $4`,

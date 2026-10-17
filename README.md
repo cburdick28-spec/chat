@@ -22,6 +22,18 @@ Copy `.env.example` to `.env.local` for local dev. On Vercel, add these in Proje
 
 Tables are created automatically on first request.
 
+## Messages
+
+The chat has an **Everyone** room plus private one-on-one messages. Tap a friend's name in the row above the message box to open your DM with them; a red number shows unread messages (also on the Chat tab, even while you're on Reels). Friends appear in that row after they've signed in once. Private messages only ever load for the two people in them.
+
+## Sharing reels
+
+Hit **Send** under any reel to drop it into a DM or the Everyone room as a playable card, with an optional note. The card shows a poster until tapped, then plays right in the chat. The reel is copied into the message, so it keeps working even if someone removes it from the feed later.
+
+## Hearts train "For you"
+
+The heart under each reel is a signal, not just a counter. Hearting reels of a topic pulls that topic forward in your feed (up to a cap, so it never takes over), and the next YouTube refresh searches your hearted topics, so the feed drifts toward what you actually like. Your "For you" picks still work and stack with hearts. Hearts only teach topics for auto-picked Shorts; pasted links have no topic.
+
 ## Emojis
 
 Tap the smiley next to the message box. Recents are remembered per device, and a message that's only a few emoji shows up big with no bubble.

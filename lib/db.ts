@@ -116,6 +116,47 @@ async function createSchema() {
       primary key (user_id, topic)
     )
   `);
+  // Everyone who has opened the app, keyed by their session id (Google and
+  // password users alike). Powers the "who can I message" list.
+  await query(`
+    create table if not exists people (
+      id text primary key,
+      name text not null,
+      last_seen timestamptz not null default now()
+    )
+  `);
+  // recipient_id null = the everyone chat; set = a private message to that person.
+  await query(`alter table messages add column if not exists recipient_id text`);
+  // A reel attached to a message. Snapshotted so the card still plays if the reel
+  // is later removed from the feed.
+  await query(`alter table messages add column if not exists reel_platform text`);
+  await query(`alter table messages add column if not exists reel_ext_id text`);
+  await query(`alter table messages add column if not exists reel_title text`);
+  await query(`alter table messages add column if not exists reel_author text`);
+  await query(
+    `create index if not exists messages_recipient_id on messages (recipient_id, id)`,
+  );
+  // How far each person has read in each conversation (peer_id 'all' = everyone chat).
+  await query(`
+    create table if not exists dm_reads (
+      user_id text not null,
+      peer_id text not null,
+      last_read_id bigint not null default 0,
+      primary key (user_id, peer_id)
+    )
+  `);
+  // Hearts on reels. They bend the "For you" ranking and refresh topics.
+  await query(`
+    create table if not exists reel_likes (
+      user_id text not null,
+      reel_id bigint not null references reels(id) on delete cascade,
+      liked_at timestamptz not null default now(),
+      primary key (user_id, reel_id)
+    )
+  `);
+  await query(
+    `create index if not exists reel_likes_reel on reel_likes (reel_id)`,
+  );
   // YouTube search quota is finite (100 units a search), so count searches per day.
   await query(`
     create table if not exists yt_budget (
